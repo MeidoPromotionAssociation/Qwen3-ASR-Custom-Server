@@ -154,7 +154,6 @@
 
 - Python `3.12`
 - `uv`
-- 一个可写目录用于项目和缓存
 - 把仓库下载到本地（点击 CODE 按钮选择 Download Zip，然后自己找个目录解压，或者 `git clone https://github.com/MeidoPromotionAssociation/Qwen3-ASR-Custom-Server.git`）
 
 如果要跑 GPU，还需要：
@@ -298,6 +297,61 @@ uv run qwen3-asr-http --host 0.0.0.0 --port 8000
 - 歌词或歌曲场景建议显式传 `language`
 - 如果你只是为了先验证链路，建议先跑“不带时间戳”的版本
 
+### Linux CPU 线程配置说明
+
+CPU 模式下，线程配置主要看这几个量：
+
+- `QWEN_ASR_THREADS`
+  - 这是这个服务最核心的 CPU 线程参数
+  - `app.py` 会用它调用 `torch.set_num_threads(...)`
+- `OMP_NUM_THREADS`
+  - 可选
+  - 如果你的 BLAS / OpenMP 栈会读这个变量，建议和 `QWEN_ASR_THREADS` 保持一致
+- `MKL_NUM_THREADS`
+  - 可选
+  - 如果你用的是 MKL，也建议和 `QWEN_ASR_THREADS` 保持一致
+- `OPENBLAS_NUM_THREADS`
+  - 可选
+  - 如果你的 `numpy/scipy` 链接的是 OpenBLAS，它会影响这些库自己的线程数
+  - 对这个服务来说，它更多影响音频预处理，不是主推理线程的主要控制项
+- `TORCH_NUM_THREADS`
+  - 对这个项目通常不需要单独设置
+  - 因为 `app.py` 已经会根据 `QWEN_ASR_THREADS` 调用 `torch.set_num_threads(...)`
+  - 如果你同时设置了它，建议和 `QWEN_ASR_THREADS` 保持一致，避免混淆
+
+建议做法：
+
+- 先把 `QWEN_ASR_THREADS` 设成物理核数
+- 如果延迟抖动很大，再往下调
+- 不要默认按逻辑线程数直接拉满
+
+例如，一台 32 物理核的机器，可以先这样跑：
+
+```bash
+export QWEN_ASR_THREADS=32
+export OMP_NUM_THREADS=32
+export MKL_NUM_THREADS=32
+export OPENBLAS_NUM_THREADS=1
+export QWEN_ASR_MAX_BATCH_SIZE=2
+```
+
+如果你是双路 NUMA 机器，或者发现吞吐和延迟都不稳定，可以试这些组合：
+
+- `QWEN_ASR_THREADS=16`, `QWEN_ASR_MAX_BATCH_SIZE=1`
+- `QWEN_ASR_THREADS=32`, `QWEN_ASR_MAX_BATCH_SIZE=1`
+- `QWEN_ASR_THREADS=32`, `QWEN_ASR_MAX_BATCH_SIZE=2`
+
+不要一上来就把 `QWEN_ASR_THREADS`、`OMP_NUM_THREADS`、`MKL_NUM_THREADS` 都设成逻辑 CPU 总数。
+
+对 `OPENBLAS_NUM_THREADS`，更稳的默认值通常是：
+
+```bash
+export OPENBLAS_NUM_THREADS=1
+```
+
+原因是这个服务的主耗时通常在 PyTorch 推理，而不是 OpenBLAS。  
+把 OpenBLAS 线程也开很大，反而更容易造成线程争抢。只有当你明确测到 OpenBLAS 成了瓶颈，再考虑把它调大。
+
 ### Linux 5. 验证服务
 
 #### 健康检查
@@ -358,6 +412,45 @@ curl -X POST http://127.0.0.1:8000/v1/audio/transcriptions/batch \
   -F "return_timestamps=true"
 ```
 
+### Linux systemd 示例
+
+仓库里提供了一个示例文件：
+
+- [qwen3-asr.service.example](/C:/Users/a1093/Documents/GitHub/Qwen3-ASR/new/qwen3-asr.service.example)
+
+使用步骤：
+
+1. 把它复制到 `/etc/systemd/system/qwen3-asr.service`
+2. 按你的实际路径修改以下字段：
+   - `User`
+   - `WorkingDirectory`
+   - `ExecStart`
+3. 如果你不需要时间戳，删掉：
+   - `QWEN_ALIGNER_MODEL`
+   - `QWEN_ALIGNER_DTYPE`
+4. 重新加载并启动服务：
+
+```bash
+sudo cp qwen3-asr.service.example /etc/systemd/system/qwen3-asr.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now qwen3-asr.service
+sudo systemctl status qwen3-asr.service
+```
+
+查看日志：
+
+```bash
+journalctl -u qwen3-asr.service -f
+```
+
+如果你要跑 GPU，把示例里的这些值改掉：
+
+- `QWEN_ASR_DEVICE=cpu` 改成 `QWEN_ASR_DEVICE=cuda:0`
+- `QWEN_ASR_DTYPE=float32` 改成 `QWEN_ASR_DTYPE=float16`
+- `QWEN_ALIGNER_DTYPE=float32` 改成 `QWEN_ALIGNER_DTYPE=float16`
+- `QWEN_ASR_THREADS`、`OMP_NUM_THREADS`、`MKL_NUM_THREADS` 这些 CPU 线程相关项通常可以删掉
+- `OPENBLAS_NUM_THREADS` 也通常可以删掉
+
 ## Windows
 
 下面的 Windows 说明默认使用 PowerShell。
@@ -371,6 +464,7 @@ curl -X POST http://127.0.0.1:8000/v1/audio/transcriptions/batch \
 - `uv`
 - PowerShell
 - 把仓库下载到本地（点击 CODE 按钮选择 Download Zip，然后自己找个目录解压，或者 `git clone https://github.com/MeidoPromotionAssociation/Qwen3-ASR-Custom-Server.git`）
+
 
 如果要跑 GPU，还需要：
 
@@ -546,6 +640,7 @@ curl.exe -X POST http://127.0.0.1:8000/v1/audio/transcriptions/batch `
 | `QWEN_ASR_MAX_NEW_TOKENS` | `256` | 最大生成 token 数 |
 | `QWEN_ASR_MAX_UPLOAD_MB` | `100` | 单文件上传大小限制 |
 | `QWEN_ASR_TMPDIR` | 系统默认临时目录 | 上传文件缓存目录 |
+| `OPENBLAS_NUM_THREADS` | 不设置 | 可选，控制 OpenBLAS 线程数 |
 | `QWEN_ASR_HOST` | `0.0.0.0` | 监听地址 |
 | `QWEN_ASR_PORT` | `8000` | 监听端口 |
 | `QWEN_ASR_ATTN_IMPLEMENTATION` | 空 | 可选，例如 `flash_attention_2` |
