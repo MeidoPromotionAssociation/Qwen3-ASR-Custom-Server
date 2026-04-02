@@ -117,6 +117,7 @@
 - Python `3.12`
 - `uv`
 - 一个可写目录用于项目和缓存
+- 把仓库下载到本地（点击 CODE 按钮选择 Download Zip，然后自己找个目录解压，或者 `git clone https://github.com/MeidoPromotionAssociation/Qwen3-ASR-Custom-Server.git`）
 
 如果你打算在 Linux 上用 GPU，还需要：
 
@@ -371,6 +372,7 @@ curl -X POST http://127.0.0.1:8000/v1/audio/transcriptions/batch \
 - Python `3.12`
 - `uv`
 - PowerShell
+- 把仓库下载到本地（点击 CODE 按钮选择 Download Zip，然后自己找个目录解压，或者 `git clone https://github.com/MeidoPromotionAssociation/Qwen3-ASR-Custom-Server.git`）
 
 如果你打算在 Windows 上用 GPU，还需要：
 
