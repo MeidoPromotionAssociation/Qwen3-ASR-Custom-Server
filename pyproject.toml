@@ -7,7 +7,7 @@ name = "qwen3-asr-http-service"
 version = "0.1.0"
 description = "Minimal HTTP service for Qwen3-ASR-1.7B using the transformers backend"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.13"
 dependencies = [
   "fastapi>=0.115,<1.0",
   "python-multipart>=0.0.20,<1.0",
