@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qwen3-asr-http-service"
+version = "0.1.0"
+description = "Minimal HTTP service for Qwen3-ASR-1.7B using the transformers backend"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "python-multipart>=0.0.20,<1.0",
+  "qwen-asr==0.0.6",
+  "uvicorn[standard]>=0.34,<1.0",
+]
+
+[project.scripts]
+qwen3-asr-http = "app:main"
+
+[tool.setuptools]
+py-modules = ["app"]
