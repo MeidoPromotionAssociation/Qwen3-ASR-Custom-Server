@@ -148,12 +148,8 @@
 
 - Python `3.12`
 - `uv`
-<<<<<<< Updated upstream
 - 一个可写目录用于项目和缓存
 - 把仓库下载到本地（点击 CODE 按钮选择 Download Zip，然后自己找个目录解压，或者 `git clone https://github.com/MeidoPromotionAssociation/Qwen3-ASR-Custom-Server.git`）
-=======
-- 一个可写目录用于缓存和模型下载
->>>>>>> Stashed changes
 
 如果要跑 GPU，还需要：
 
