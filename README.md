@@ -1,5 +1,13 @@
 # Qwen3-ASR HTTP Service
 
+为 [COM3D2 Translate Tool](https://github.com/MeidoPromotionAssociation/COM3D2_TRANSLATE_TOOL) 准备的 ASR 服务器。
+
+本项目 99% 由 GPT5.4 编写。
+
+<br>
+<br>
+<br>
+
 一个最小可运行的 `Qwen/Qwen3-ASR-1.7B` HTTP 服务示例，使用：
 
 - `transformers` 后端
@@ -8,8 +16,6 @@
 - 单文件转写
 - 批量转写
 - 可选启用 `Qwen/Qwen3-ForcedAligner-0.6B` 返回时间戳
-
-这个项目的目标很简单：让别人照着 README 做，就能启动一个本地或服务器上的 ASR HTTP 服务。
 
 ## 接口概览
 
