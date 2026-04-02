@@ -1,0 +1,34 @@
+[Unit]
+Description=Qwen3-ASR HTTP Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=youruser
+WorkingDirectory=/opt/qwen3-asr-http
+
+# If uv is not on PATH for systemd, replace /usr/bin/env uv with the full path to uv.
+ExecStart=/usr/bin/env uv run qwen3-asr-http --host 0.0.0.0 --port 8000
+
+Environment=QWEN_ASR_MODEL=Qwen/Qwen3-ASR-1.7B
+Environment=QWEN_ASR_DEVICE=cpu
+Environment=QWEN_ASR_DTYPE=float32
+Environment=QWEN_ASR_THREADS=32
+Environment=OMP_NUM_THREADS=32
+Environment=MKL_NUM_THREADS=32
+Environment=QWEN_ASR_MAX_BATCH_SIZE=1
+Environment=QWEN_ASR_MAX_NEW_TOKENS=256
+Environment=QWEN_ASR_MAX_UPLOAD_MB=100
+Environment=QWEN_ASR_TMPDIR=/dev/shm
+
+# Remove these two lines if you do not need timestamps.
+Environment=QWEN_ALIGNER_MODEL=Qwen/Qwen3-ForcedAligner-0.6B
+Environment=QWEN_ALIGNER_DTYPE=float32
+
+Restart=always
+RestartSec=5
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
