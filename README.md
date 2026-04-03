@@ -174,31 +174,30 @@ uv pip install -e .
 
 #### Linux GPU
 
-下面示例使用 CUDA 12.8。  
-如果你的 CUDA 版本不同，请以 PyTorch 官方安装页面为准：
+本示例默认是 CUDA 12.8
 
-- https://pytorch.org/get-started/locally/
+这个项目已经把 PyTorch 的 CPU / CUDA 版本做成了 `extra`。
 
 ```bash
-uv pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+uv sync --extra cu128
 ```
 
 检查 GPU 是否可见：
 
 ```bash
-uv run python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no cuda')"
+uv run --extra cu128 python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no cuda')"
 ```
 
 #### Linux CPU
 
 ```bash
-uv pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+uv sync --extra cpu
 ```
 
 检查 PyTorch：
 
 ```bash
-uv run python -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
+uv run --extra cpu python -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
 ```
 
 ### Linux 3. 可选：提前下载模型
@@ -237,7 +236,7 @@ QWEN_ASR_DEVICE=cuda:0 \
 QWEN_ASR_DTYPE=float16 \
 QWEN_ASR_MAX_BATCH_SIZE=4 \
 QWEN_ASR_MAX_NEW_TOKENS=256 \
-uv run qwen3-asr-http --host 0.0.0.0 --port 8000
+uv run --extra cu128 qwen3-asr-http --host 0.0.0.0 --port 8000
 ```
 
 #### Linux GPU，转写并支持时间戳
@@ -249,7 +248,7 @@ QWEN_ALIGNER_MODEL=Qwen/Qwen3-ForcedAligner-0.6B \
 QWEN_ALIGNER_DTYPE=float16 \
 QWEN_ASR_MAX_BATCH_SIZE=4 \
 QWEN_ASR_MAX_NEW_TOKENS=256 \
-uv run qwen3-asr-http --host 0.0.0.0 --port 8000
+uv run --extra cu128 qwen3-asr-http --host 0.0.0.0 --port 8000
 ```
 
 如果你已经安装了 FlashAttention 2，并且系统是 Linux，也可以尝试：
@@ -261,7 +260,7 @@ QWEN_ASR_DEVICE=cuda:0 \
 QWEN_ASR_DTYPE=float16 \
 QWEN_ALIGNER_MODEL=Qwen/Qwen3-ForcedAligner-0.6B \
 QWEN_ALIGNER_DTYPE=float16 \
-uv run qwen3-asr-http --host 0.0.0.0 --port 8000
+uv run --extra cu128 qwen3-asr-http --host 0.0.0.0 --port 8000
 ```
 
 #### Linux CPU，只做转写
@@ -273,7 +272,7 @@ QWEN_ASR_THREADS=32 \
 QWEN_ASR_MAX_BATCH_SIZE=2 \
 QWEN_ASR_MAX_NEW_TOKENS=256 \
 QWEN_ASR_TMPDIR=/dev/shm \
-uv run qwen3-asr-http --host 0.0.0.0 --port 8000
+uv run --extra cpu qwen3-asr-http --host 0.0.0.0 --port 8000
 ```
 
 #### Linux CPU，转写并支持时间戳
@@ -287,7 +286,7 @@ QWEN_ASR_THREADS=32 \
 QWEN_ASR_MAX_BATCH_SIZE=1 \
 QWEN_ASR_MAX_NEW_TOKENS=256 \
 QWEN_ASR_TMPDIR=/dev/shm \
-uv run qwen3-asr-http --host 0.0.0.0 --port 8000
+uv run --extra cpu qwen3-asr-http --host 0.0.0.0 --port 8000
 ```
 
 说明：
@@ -445,11 +444,12 @@ journalctl -u qwen3-asr.service -f
 
 如果你要跑 GPU，把示例里的这些值改掉：
 
+
+- `ExecStart=/usr/bin/env uv run --extra cpu ...` 改成 `ExecStart=/usr/bin/env uv run --extra cu128 ...`
 - `QWEN_ASR_DEVICE=cpu` 改成 `QWEN_ASR_DEVICE=cuda:0`
 - `QWEN_ASR_DTYPE=float32` 改成 `QWEN_ASR_DTYPE=float16`
 - `QWEN_ALIGNER_DTYPE=float32` 改成 `QWEN_ALIGNER_DTYPE=float16`
-- `QWEN_ASR_THREADS`、`OMP_NUM_THREADS`、`MKL_NUM_THREADS` 这些 CPU 线程相关项通常可以删掉
-- `OPENBLAS_NUM_THREADS` 也通常可以删掉
+- `QWEN_ASR_THREADS`、`OMP_NUM_THREADS`、`MKL_NUM_THREADS`、`OPENBLAS_NUM_THREADS` 这些 CPU 线程相关项通常可以删掉
 
 ## Windows
 
@@ -489,31 +489,31 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 #### Windows GPU
 
-下面示例仍然使用 CUDA 12.8。  
-如果你的环境不是这个版本，请以 PyTorch 官方安装页为准：
+本示例默认是 CUDA 12.8
 
-- https://pytorch.org/get-started/locally/
+
+这个项目已经把 PyTorch 的 CPU / CUDA 版本做成了 `extra`。
 
 ```powershell
-uv pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+uv sync --extra cu128
 ```
 
 检查 GPU：
 
 ```powershell
-uv run python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no cuda')"
+uv run --extra cu128 python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no cuda')"
 ```
 
 #### Windows CPU
 
 ```powershell
-uv pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+uv sync --extra cpu
 ```
 
 检查 PyTorch：
 
 ```powershell
-uv run python -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
+uv run --extra cpu python -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
 ```
 
 ### Windows 3. 可选：提前下载模型
@@ -543,7 +543,7 @@ $env:QWEN_ASR_DEVICE = "cuda:0"
 $env:QWEN_ASR_DTYPE = "float16"
 $env:QWEN_ASR_MAX_BATCH_SIZE = "4"
 $env:QWEN_ASR_MAX_NEW_TOKENS = "256"
-uv run qwen3-asr-http --host 0.0.0.0 --port 8000
+uv run --extra cu128 qwen3-asr-http --host 0.0.0.0 --port 8000
 ```
 
 #### Windows GPU，转写并支持时间戳
@@ -555,7 +555,7 @@ $env:QWEN_ALIGNER_MODEL = "Qwen/Qwen3-ForcedAligner-0.6B"
 $env:QWEN_ALIGNER_DTYPE = "float16"
 $env:QWEN_ASR_MAX_BATCH_SIZE = "4"
 $env:QWEN_ASR_MAX_NEW_TOKENS = "256"
-uv run qwen3-asr-http --host 0.0.0.0 --port 8000
+uv run --extra cu128 qwen3-asr-http --host 0.0.0.0 --port 8000
 ```
 
 #### Windows CPU，只做转写
@@ -566,7 +566,7 @@ $env:QWEN_ASR_DTYPE = "float32"
 $env:QWEN_ASR_THREADS = "16"
 $env:QWEN_ASR_MAX_BATCH_SIZE = "1"
 $env:QWEN_ASR_MAX_NEW_TOKENS = "256"
-uv run qwen3-asr-http --host 0.0.0.0 --port 8000
+uv run --extra cpu qwen3-asr-http --host 0.0.0.0 --port 8000
 ```
 
 #### Windows CPU，转写并支持时间戳
@@ -579,7 +579,7 @@ $env:QWEN_ALIGNER_DTYPE = "float32"
 $env:QWEN_ASR_THREADS = "16"
 $env:QWEN_ASR_MAX_BATCH_SIZE = "1"
 $env:QWEN_ASR_MAX_NEW_TOKENS = "256"
-uv run qwen3-asr-http --host 0.0.0.0 --port 8000
+uv run --extra cpu qwen3-asr-http --host 0.0.0.0 --port 8000
 ```
 
 说明：
@@ -664,3 +664,4 @@ curl.exe -X POST http://127.0.0.1:8000/v1/audio/transcriptions/batch `
 - Qwen3-ASR README：https://github.com/QwenLM/Qwen3-ASR/blob/main/README.md
 - PyTorch 安装指南：https://pytorch.org/get-started/locally/
 - uv 文档：https://docs.astral.sh/uv/
+- uv PyTorch 集成文档：https://docs.astral.sh/uv/guides/integration/pytorch/
