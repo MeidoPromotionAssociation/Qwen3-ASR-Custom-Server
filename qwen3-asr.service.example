@@ -27,6 +27,11 @@ Environment=QWEN_ASR_MAX_NEW_TOKENS=256
 Environment=QWEN_ASR_MAX_UPLOAD_MB=100
 Environment=QWEN_ASR_TMPDIR=/dev/shm
 
+# Optional: used only when a request explicitly sends convert_audio=true.
+# The request default is false, so ffmpeg is not required for pre-converted audio.
+Environment=QWEN_ASR_FFMPEG=/usr/bin/ffmpeg
+Environment=QWEN_ASR_FFMPEG_TIMEOUT=120
+
 # torch.compile is opt-in. When enabled, compilation happens on the first
 # inference request, which will therefore be slower. An empty mode uses the
 # PyTorch default; common explicit modes include default and reduce-overhead.

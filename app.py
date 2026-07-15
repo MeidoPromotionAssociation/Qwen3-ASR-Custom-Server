@@ -3,6 +3,8 @@
 import argparse
 import logging
 import os
+import shutil
+import subprocess
 import tempfile
 import threading
 from contextlib import asynccontextmanager
@@ -20,6 +22,8 @@ from native_asr import NativeQwen3ASRModel
 LOG = logging.getLogger("qwen3_asr_http")
 INFER_LOCK = threading.Lock()
 STATE: dict[str, Any] = {"model": None, "config": None}
+AUDIO_SAMPLE_RATE = 16_000
+FFMPEG_ERROR_DETAIL_LIMIT = 2_000
 
 
 def _env_int(name: str, default: int) -> int:
@@ -75,6 +79,10 @@ def _load_config() -> dict[str, Any]:
     default_threads = max(1, logical_cpus // 2)
     default_batch = 4 if device.startswith("cuda") else 2
     temp_dir = os.getenv("QWEN_ASR_TMPDIR", "").strip() or None
+    ffmpeg_binary = os.getenv("QWEN_ASR_FFMPEG", "ffmpeg").strip() or "ffmpeg"
+    ffmpeg_timeout_seconds = _env_int("QWEN_ASR_FFMPEG_TIMEOUT", 120)
+    if ffmpeg_timeout_seconds <= 0:
+        raise ValueError("QWEN_ASR_FFMPEG_TIMEOUT must be greater than zero.")
 
     return {
         "model_name": os.getenv("QWEN_ASR_MODEL", "Qwen/Qwen3-ASR-1.7B-hf"),
@@ -90,6 +98,8 @@ def _load_config() -> dict[str, Any]:
         "max_upload_bytes": _env_int("QWEN_ASR_MAX_UPLOAD_MB", 100) * 1024 * 1024,
         "threads": _env_int("QWEN_ASR_THREADS", default_threads),
         "temp_dir": temp_dir,
+        "ffmpeg_binary": ffmpeg_binary,
+        "ffmpeg_timeout_seconds": ffmpeg_timeout_seconds,
         "host": os.getenv("QWEN_ASR_HOST", "0.0.0.0"),
         "port": _env_int("QWEN_ASR_PORT", 8000),
         "attn_implementation": os.getenv("QWEN_ASR_ATTN_IMPLEMENTATION", "").strip() or None,
@@ -98,6 +108,10 @@ def _load_config() -> dict[str, Any]:
         "compile_aligner": _env_bool("QWEN_ALIGNER_COMPILE"),
         "compile_mode": os.getenv("QWEN_COMPILE_MODE", "").strip() or None,
     }
+
+
+def _resolve_ffmpeg(binary: str) -> Optional[str]:
+    return shutil.which(binary)
 
 
 def _configure_torch(config: dict[str, Any]) -> None:
@@ -124,7 +138,9 @@ def _build_model(config: dict[str, Any]) -> NativeQwen3ASRModel:
 
 
 def _save_upload(upload: UploadFile, temp_dir: Optional[str], max_upload_bytes: int) -> str:
-    suffix = Path(upload.filename or "audio.wav").suffix or ".wav"
+    suffix = Path(upload.filename or "audio.upload").suffix
+    if not (1 < len(suffix) <= 17 and suffix.isascii() and suffix[1:].isalnum()):
+        suffix = ".upload"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=temp_dir) as tmp:
         written = 0
         while True:
@@ -143,6 +159,133 @@ def _save_upload(upload: UploadFile, temp_dir: Optional[str], max_upload_bytes: 
         return tmp.name
 
 
+def _unlink_temp_file(path: Optional[str]) -> None:
+    if path is None:
+        return
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
+def _ffmpeg_error_detail(stderr: Any, source_path: str, output_path: str) -> str:
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    detail = " ".join(str(stderr or "").split())
+    detail = detail.replace(source_path, "<uploaded audio>")
+    detail = detail.replace(output_path, "<converted audio>")
+    if len(detail) > FFMPEG_ERROR_DETAIL_LIMIT:
+        detail = "..." + detail[-(FFMPEG_ERROR_DETAIL_LIMIT - 3) :]
+    return detail
+
+
+def _convert_audio_to_wav(
+    source_path: str,
+    *,
+    ffmpeg_path: Optional[str],
+    temp_dir: Optional[str],
+    timeout_seconds: int,
+    original_filename: Optional[str],
+) -> str:
+    display_name = original_filename or "uploaded audio"
+    if ffmpeg_path is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Server-side audio conversion is unavailable because ffmpeg was not found. "
+                "Install ffmpeg or retry with convert_audio=false for an already supported audio file."
+            ),
+        )
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav", dir=temp_dir) as tmp:
+        output_path = tmp.name
+
+    command = [
+        ffmpeg_path,
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-protocol_whitelist",
+        "file,pipe",
+        "-y",
+        "-i",
+        source_path,
+        "-map",
+        "0:a:0",
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(AUDIO_SAMPLE_RATE),
+        "-c:a",
+        "pcm_s16le",
+        "-f",
+        "wav",
+        output_path,
+    ]
+    try:
+        subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=timeout_seconds,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except subprocess.TimeoutExpired as exc:
+        _unlink_temp_file(output_path)
+        raise HTTPException(
+            status_code=408,
+            detail=(
+                f"Server-side audio conversion timed out after {timeout_seconds} seconds "
+                f"for {display_name!r}."
+            ),
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        _unlink_temp_file(output_path)
+        reason = _ffmpeg_error_detail(exc.stderr, source_path, output_path)
+        detail = (
+            f"ffmpeg could not decode {display_name!r}. The file may be corrupt, use a codec "
+            "unavailable in this ffmpeg build, or contain no audio stream."
+        )
+        if reason:
+            detail = f"{detail} ffmpeg reported: {reason}"
+        raise HTTPException(status_code=400, detail=detail) from exc
+    except OSError as exc:
+        _unlink_temp_file(output_path)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Server-side audio conversion could not start ffmpeg: {exc}",
+        ) from exc
+
+    return output_path
+
+
+def _prepare_audio_upload(
+    upload: UploadFile,
+    config: dict[str, Any],
+    *,
+    convert_audio: bool,
+) -> str:
+    source_path = _save_upload(upload, config["temp_dir"], config["max_upload_bytes"])
+    if not convert_audio:
+        return source_path
+
+    try:
+        return _convert_audio_to_wav(
+            source_path,
+            ffmpeg_path=config.get("ffmpeg_path"),
+            temp_dir=config["temp_dir"],
+            timeout_seconds=config["ffmpeg_timeout_seconds"],
+            original_filename=upload.filename,
+        )
+    finally:
+        _unlink_temp_file(source_path)
+
+
 def _clean_optional(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
@@ -159,6 +302,44 @@ def _parse_bool(value: Optional[str], default: bool = False) -> bool:
     if normalized in {"0", "false", "no", "n", "off", ""}:
         return False
     raise HTTPException(status_code=400, detail="Invalid boolean value. Use true or false.")
+
+
+def _is_audio_decode_error(exc: BaseException) -> bool:
+    current: Optional[BaseException] = exc
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        module = type(current).__module__
+        if module == "soundfile" or module.startswith(("audioread", "librosa")):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _inference_http_exception(
+    exc: Exception,
+    *,
+    convert_audio: bool,
+) -> Optional[HTTPException]:
+    if _is_audio_decode_error(exc):
+        if convert_audio:
+            return HTTPException(
+                status_code=500,
+                detail=(
+                    "The server audio backend could not read the WAV produced by ffmpeg. "
+                    "Check the server's soundfile/librosa installation."
+                ),
+            )
+        return HTTPException(
+            status_code=400,
+            detail=(
+                "The uploaded audio could not be decoded without server-side conversion. "
+                "Retry with convert_audio=true or upload an audio format supported by the model backend."
+            ),
+        )
+    if isinstance(exc, (ValueError, ImportError)):
+        return HTTPException(status_code=400, detail=str(exc))
+    return None
 
 
 def _normalize_list(values: Optional[list[str]], n: int, field_name: str) -> list[str]:
@@ -212,6 +393,21 @@ async def lifespan(_: FastAPI):
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     config = _load_config()
+    config["ffmpeg_path"] = _resolve_ffmpeg(config["ffmpeg_binary"])
+    if config["ffmpeg_path"] is None:
+        LOG.warning(
+            "ffmpeg=%r was not found; requests explicitly using convert_audio=true will return "
+            "HTTP 503 until ffmpeg is installed. The default convert_audio=false path remains "
+            "available for audio supported by the model backend.",
+            config["ffmpeg_binary"],
+        )
+    else:
+        LOG.info(
+            "Server-side audio conversion enabled ffmpeg=%s timeout=%ss target=wav/pcm_s16le/%sHz/mono",
+            config["ffmpeg_path"],
+            config["ffmpeg_timeout_seconds"],
+            AUDIO_SAMPLE_RATE,
+        )
     _configure_torch(config)
     LOG.info(
         "Loading native Transformers model=%s aligner=%s device=%s dtype=%s "
@@ -258,6 +454,10 @@ def healthz() -> dict[str, Any]:
         "max_batch_size": config["max_batch_size"],
         "max_new_tokens": config["max_new_tokens"],
         "max_upload_mb": config["max_upload_mb"],
+        "audio_conversion_default": False,
+        "audio_conversion_available": config["ffmpeg_path"] is not None,
+        "audio_sample_rate": AUDIO_SAMPLE_RATE,
+        "ffmpeg_timeout_seconds": config["ffmpeg_timeout_seconds"],
         "compile_asr": config["compile_asr"],
         "compile_aligner": config["compile_aligner"],
         "compile_mode": config["compile_mode"],
@@ -270,6 +470,7 @@ def transcribe(
     language: Optional[str] = Form(None),
     prompt: str = Form(""),
     return_timestamps: Optional[str] = Form(None),
+    convert_audio: Optional[str] = Form(None),
 ) -> dict[str, Any]:
     config = STATE["config"]
     model = STATE["model"]
@@ -277,11 +478,17 @@ def transcribe(
         raise HTTPException(status_code=503, detail="Model is not ready yet.")
 
     want_timestamps = _parse_bool(return_timestamps, default=False)
+    should_convert_audio = _parse_bool(convert_audio, default=False)
     if want_timestamps:
         _require_aligner(config, model)
 
-    temp_path = _save_upload(file, config["temp_dir"], config["max_upload_bytes"])
+    temp_path: Optional[str] = None
     try:
+        temp_path = _prepare_audio_upload(
+            file,
+            config,
+            convert_audio=should_convert_audio,
+        )
         with INFER_LOCK:
             try:
                 result = model.transcribe(
@@ -290,8 +497,14 @@ def transcribe(
                     language=_clean_optional(language),
                     return_time_stamps=want_timestamps,
                 )[0]
-            except (ValueError, ImportError) as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:
+                http_exc = _inference_http_exception(
+                    exc,
+                    convert_audio=should_convert_audio,
+                )
+                if http_exc is not None:
+                    raise http_exc from exc
+                raise
 
         payload = {
             "text": result.text,
@@ -304,10 +517,7 @@ def transcribe(
             payload["timestamps"] = _serialize_timestamps(getattr(result, "time_stamps", None))
         return payload
     finally:
-        try:
-            os.unlink(temp_path)
-        except FileNotFoundError:
-            pass
+        _unlink_temp_file(temp_path)
         file.file.close()
 
 
@@ -317,6 +527,7 @@ def transcribe_batch(
     language: Optional[list[str]] = Form(None),
     prompt: Optional[list[str]] = Form(None),
     return_timestamps: Optional[str] = Form(None),
+    convert_audio: Optional[str] = Form(None),
 ) -> dict[str, Any]:
     config = STATE["config"]
     model = STATE["model"]
@@ -326,6 +537,7 @@ def transcribe_batch(
         raise HTTPException(status_code=400, detail="At least one file is required.")
 
     want_timestamps = _parse_bool(return_timestamps, default=False)
+    should_convert_audio = _parse_bool(convert_audio, default=False)
     if want_timestamps:
         _require_aligner(config, model)
 
@@ -335,7 +547,13 @@ def transcribe_batch(
 
     try:
         for upload in files:
-            temp_paths.append(_save_upload(upload, config["temp_dir"], config["max_upload_bytes"]))
+            temp_paths.append(
+                _prepare_audio_upload(
+                    upload,
+                    config,
+                    convert_audio=should_convert_audio,
+                )
+            )
 
         with INFER_LOCK:
             try:
@@ -345,8 +563,14 @@ def transcribe_batch(
                     language=[_clean_optional(item) for item in languages],
                     return_time_stamps=want_timestamps,
                 )
-            except (ValueError, ImportError) as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:
+                http_exc = _inference_http_exception(
+                    exc,
+                    convert_audio=should_convert_audio,
+                )
+                if http_exc is not None:
+                    raise http_exc from exc
+                raise
 
         return {
             "model": config["model_name"],
@@ -368,10 +592,7 @@ def transcribe_batch(
         }
     finally:
         for path in temp_paths:
-            try:
-                os.unlink(path)
-            except FileNotFoundError:
-                pass
+            _unlink_temp_file(path)
         for upload in files:
             upload.file.close()
 
@@ -381,15 +602,22 @@ def align_text_to_audio(
     file: UploadFile = File(...),
     text: str = Form(...),
     language: str = Form(...),
+    convert_audio: Optional[str] = Form(None),
 ) -> dict[str, Any]:
     config = STATE["config"]
     model = STATE["model"]
     if config is None or model is None:
         raise HTTPException(status_code=503, detail="Model is not ready yet.")
     aligner = _require_aligner(config, model)
+    should_convert_audio = _parse_bool(convert_audio, default=False)
 
-    temp_path = _save_upload(file, config["temp_dir"], config["max_upload_bytes"])
+    temp_path: Optional[str] = None
     try:
+        temp_path = _prepare_audio_upload(
+            file,
+            config,
+            convert_audio=should_convert_audio,
+        )
         with INFER_LOCK:
             try:
                 result = aligner.align(
@@ -397,8 +625,14 @@ def align_text_to_audio(
                     text=text,
                     language=language,
                 )[0]
-            except (ValueError, ImportError) as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:
+                http_exc = _inference_http_exception(
+                    exc,
+                    convert_audio=should_convert_audio,
+                )
+                if http_exc is not None:
+                    raise http_exc from exc
+                raise
 
         return {
             "text": text,
@@ -408,10 +642,7 @@ def align_text_to_audio(
             "timestamps": _serialize_timestamps(result),
         }
     finally:
-        try:
-            os.unlink(temp_path)
-        except FileNotFoundError:
-            pass
+        _unlink_temp_file(temp_path)
         file.file.close()
 
 
