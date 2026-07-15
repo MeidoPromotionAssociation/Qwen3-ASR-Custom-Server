@@ -12,7 +12,9 @@ from typing import Any, Optional
 import torch
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from qwen_asr import Qwen3ASRModel
+from transformers import __version__ as transformers_version
+
+from native_asr import NativeQwen3ASRModel
 
 
 LOG = logging.getLogger("qwen3_asr_http")
@@ -27,12 +29,26 @@ def _env_int(name: str, default: int) -> int:
     return int(value)
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Environment variable {name} must be true or false, got {value!r}.")
+
+
 def _auto_device() -> str:
     return "cuda:0" if torch.cuda.is_available() else "cpu"
 
 
 def _default_dtype(device: str) -> str:
-    return "float16" if device.startswith("cuda") else "float32"
+    # Project policy: CPU prioritizes memory use with FP16, while CUDA uses
+    # FP32 by default. Both remain explicitly configurable through the env vars.
+    return "float32" if device.startswith("cuda") else "float16"
 
 
 def _torch_dtype(name: str) -> torch.dtype:
@@ -61,7 +77,7 @@ def _load_config() -> dict[str, Any]:
     temp_dir = os.getenv("QWEN_ASR_TMPDIR", "").strip() or None
 
     return {
-        "model_name": os.getenv("QWEN_ASR_MODEL", "Qwen/Qwen3-ASR-1.7B"),
+        "model_name": os.getenv("QWEN_ASR_MODEL", "Qwen/Qwen3-ASR-1.7B-hf"),
         "aligner_model_name": os.getenv("QWEN_ALIGNER_MODEL", "").strip() or None,
         "device": device,
         "dtype_name": dtype_name,
@@ -78,6 +94,9 @@ def _load_config() -> dict[str, Any]:
         "port": _env_int("QWEN_ASR_PORT", 8000),
         "attn_implementation": os.getenv("QWEN_ASR_ATTN_IMPLEMENTATION", "").strip() or None,
         "aligner_attn_implementation": os.getenv("QWEN_ALIGNER_ATTN_IMPLEMENTATION", "").strip() or None,
+        "compile_asr": _env_bool("QWEN_ASR_COMPILE"),
+        "compile_aligner": _env_bool("QWEN_ALIGNER_COMPILE"),
+        "compile_mode": os.getenv("QWEN_COMPILE_MODE", "").strip() or None,
     }
 
 
@@ -87,29 +106,21 @@ def _configure_torch(config: dict[str, Any]) -> None:
         torch.set_num_interop_threads(1)
 
 
-def _build_model(config: dict[str, Any]) -> Qwen3ASRModel:
-    kwargs: dict[str, Any] = {
-        "device_map": config["device"],
-        "dtype": config["dtype"],
-        "max_inference_batch_size": config["max_batch_size"],
-        "max_new_tokens": config["max_new_tokens"],
-    }
-    if config["attn_implementation"]:
-        kwargs["attn_implementation"] = config["attn_implementation"]
-    if config["aligner_model_name"]:
-        aligner_kwargs: dict[str, Any] = {
-            "device_map": config["device"],
-            "dtype": config["aligner_dtype"],
-        }
-        if config["aligner_attn_implementation"]:
-            aligner_kwargs["attn_implementation"] = config["aligner_attn_implementation"]
-        kwargs["forced_aligner"] = config["aligner_model_name"]
-        kwargs["forced_aligner_kwargs"] = aligner_kwargs
-
-    model = Qwen3ASRModel.from_pretrained(config["model_name"], **kwargs)
-    if hasattr(model, "model") and hasattr(model.model, "eval"):
-        model.model.eval()
-    return model
+def _build_model(config: dict[str, Any]) -> NativeQwen3ASRModel:
+    return NativeQwen3ASRModel.from_pretrained(
+        config["model_name"],
+        device_map=config["device"],
+        dtype=config["dtype"],
+        max_batch_size=config["max_batch_size"],
+        max_new_tokens=config["max_new_tokens"],
+        attn_implementation=config["attn_implementation"],
+        compile_asr=config["compile_asr"],
+        aligner_model_name=config["aligner_model_name"],
+        aligner_dtype=config["aligner_dtype"],
+        aligner_attn_implementation=config["aligner_attn_implementation"],
+        compile_aligner=config["compile_aligner"],
+        compile_mode=config["compile_mode"],
+    )
 
 
 def _save_upload(upload: UploadFile, temp_dir: Optional[str], max_upload_bytes: int) -> str:
@@ -164,24 +175,34 @@ def _normalize_list(values: Optional[list[str]], n: int, field_name: str) -> lis
 
 
 def _serialize_timestamps(items: Any) -> list[dict[str, Any]]:
-    return [
-        {
-            "text": getattr(item, "text", None),
-            "start_time": getattr(item, "start_time", None),
-            "end_time": getattr(item, "end_time", None),
-        }
-        for item in (items or [])
-    ]
+    serialized = []
+    for item in items or []:
+        if isinstance(item, dict):
+            serialized.append(
+                {
+                    "text": item.get("text"),
+                    "start_time": item.get("start_time"),
+                    "end_time": item.get("end_time"),
+                }
+            )
+        else:
+            serialized.append(
+                {
+                    "text": getattr(item, "text", None),
+                    "start_time": getattr(item, "start_time", None),
+                    "end_time": getattr(item, "end_time", None),
+                }
+            )
+    return serialized
 
 
-def _require_aligner(config: dict[str, Any], model: Qwen3ASRModel) -> Any:
-    aligner = getattr(model, "forced_aligner", None)
-    if not config["aligner_model_name"] or aligner is None:
+def _require_aligner(config: dict[str, Any], model: NativeQwen3ASRModel) -> NativeQwen3ASRModel:
+    if not config["aligner_model_name"] or not model.has_aligner:
         raise HTTPException(
             status_code=400,
             detail="ForcedAligner is not enabled on the server. Set QWEN_ALIGNER_MODEL first.",
         )
-    return aligner
+    return model
 
 
 @asynccontextmanager
@@ -193,7 +214,8 @@ async def lifespan(_: FastAPI):
     config = _load_config()
     _configure_torch(config)
     LOG.info(
-        "Loading model=%s aligner=%s device=%s dtype=%s aligner_dtype=%s batch=%s max_new_tokens=%s",
+        "Loading native Transformers model=%s aligner=%s device=%s dtype=%s "
+        "aligner_dtype=%s batch=%s max_new_tokens=%s compile_asr=%s compile_aligner=%s compile_mode=%s",
         config["model_name"],
         config["aligner_model_name"],
         config["device"],
@@ -201,6 +223,9 @@ async def lifespan(_: FastAPI):
         config["aligner_dtype_name"],
         config["max_batch_size"],
         config["max_new_tokens"],
+        config["compile_asr"],
+        config["compile_aligner"],
+        config["compile_mode"],
     )
     STATE["config"] = config
     STATE["model"] = _build_model(config)
@@ -210,7 +235,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="Qwen3-ASR HTTP Service",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -223,6 +248,8 @@ def healthz() -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="Model is not ready yet.")
     return {
         "ok": True,
+        "backend": "transformers-native",
+        "transformers_version": transformers_version,
         "model": config["model_name"],
         "aligner_model": config["aligner_model_name"],
         "device": config["device"],
@@ -231,6 +258,9 @@ def healthz() -> dict[str, Any]:
         "max_batch_size": config["max_batch_size"],
         "max_new_tokens": config["max_new_tokens"],
         "max_upload_mb": config["max_upload_mb"],
+        "compile_asr": config["compile_asr"],
+        "compile_aligner": config["compile_aligner"],
+        "compile_mode": config["compile_mode"],
     }
 
 
@@ -260,7 +290,7 @@ def transcribe(
                     language=_clean_optional(language),
                     return_time_stamps=want_timestamps,
                 )[0]
-            except ValueError as exc:
+            except (ValueError, ImportError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         payload = {
@@ -315,7 +345,7 @@ def transcribe_batch(
                     language=[_clean_optional(item) for item in languages],
                     return_time_stamps=want_timestamps,
                 )
-            except ValueError as exc:
+            except (ValueError, ImportError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return {
@@ -367,7 +397,7 @@ def align_text_to_audio(
                     text=text,
                     language=language,
                 )[0]
-            except ValueError as exc:
+            except (ValueError, ImportError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return {
@@ -375,7 +405,7 @@ def align_text_to_audio(
             "language": language,
             "aligner_model": config["aligner_model_name"],
             "file_name": file.filename,
-            "timestamps": _serialize_timestamps(getattr(result, "items", None)),
+            "timestamps": _serialize_timestamps(result),
         }
     finally:
         try:

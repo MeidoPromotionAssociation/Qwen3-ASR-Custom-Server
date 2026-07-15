@@ -11,9 +11,13 @@ WorkingDirectory=/opt/qwen3-asr-http
 # If uv is not on PATH for systemd, replace /usr/bin/env uv with the full path to uv.
 ExecStart=/usr/bin/env uv run --extra cpu qwen3-asr-http --host 0.0.0.0 --port 8000
 
-Environment=QWEN_ASR_MODEL=Qwen/Qwen3-ASR-1.7B
+# The application default is Qwen/Qwen3-ASR-1.7B-hf. This CPU example uses
+# the smaller 0.6B model to reduce latency and memory pressure.
+Environment=QWEN_ASR_MODEL=Qwen/Qwen3-ASR-0.6B-hf
 Environment=QWEN_ASR_DEVICE=cpu
-Environment=QWEN_ASR_DTYPE=float32
+# FP16 saves RAM. If this CPU/PyTorch build is slower or reports unsupported
+# Half operators, set both ASR and aligner dtypes to float32.
+Environment=QWEN_ASR_DTYPE=float16
 Environment=QWEN_ASR_THREADS=32
 Environment=OMP_NUM_THREADS=32
 Environment=MKL_NUM_THREADS=32
@@ -23,9 +27,16 @@ Environment=QWEN_ASR_MAX_NEW_TOKENS=256
 Environment=QWEN_ASR_MAX_UPLOAD_MB=100
 Environment=QWEN_ASR_TMPDIR=/dev/shm
 
+# torch.compile is opt-in. When enabled, compilation happens on the first
+# inference request, which will therefore be slower. An empty mode uses the
+# PyTorch default; common explicit modes include default and reduce-overhead.
+Environment=QWEN_ASR_COMPILE=false
+Environment=QWEN_ALIGNER_COMPILE=false
+Environment=QWEN_COMPILE_MODE=
+
 # Remove these two lines if you do not need timestamps.
-Environment=QWEN_ALIGNER_MODEL=Qwen/Qwen3-ForcedAligner-0.6B
-Environment=QWEN_ALIGNER_DTYPE=float32
+Environment=QWEN_ALIGNER_MODEL=Qwen/Qwen3-ForcedAligner-0.6B-hf
+Environment=QWEN_ALIGNER_DTYPE=float16
 
 Restart=always
 RestartSec=5

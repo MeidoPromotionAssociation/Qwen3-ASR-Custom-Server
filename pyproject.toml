@@ -4,25 +4,29 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qwen3-asr-http-service"
-version = "0.1.0"
-description = "Minimal HTTP service for Qwen3-ASR-1.7B using the transformers backend"
+version = "0.3.0"
+description = "Minimal HTTP service for Qwen3-ASR-1.7B-hf using the native Transformers backend"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "accelerate",
   "fastapi>=0.115,<1.0",
+  "librosa",
   "python-multipart>=0.0.20,<1.0",
-  "qwen-asr==0.0.6",
+  "transformers @ git+https://github.com/huggingface/transformers.git@498d6e984e84d29186e671656817a53a024af930",
   "uvicorn[standard]>=0.34,<1.0",
 ]
 
 [project.optional-dependencies]
 cpu = [
   "torch",
-  "torchaudio",
 ]
 cu128 = [
   "torch",
-  "torchaudio",
+]
+align-ja-ko = [
+  "nagisa",
+  "soynlp",
 ]
 
 [project.scripts]
@@ -41,10 +45,6 @@ torch = [
   { index = "pytorch-cpu", extra = "cpu" },
   { index = "pytorch-cu128", extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
-torchaudio = [
-  { index = "pytorch-cpu", extra = "cpu" },
-  { index = "pytorch-cu128", extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
@@ -57,4 +57,4 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.setuptools]
-py-modules = ["app"]
+py-modules = ["app", "native_asr"]
