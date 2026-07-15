@@ -183,13 +183,25 @@ uv sync --extra cu128 --extra align-ja-ko
 
 ## 模型下载
 
-第一次启动时，Transformers 会自动从 Hugging Face 下载模型并使用本机缓存。也可以提前下载：
+第一次启动时，Transformers 会自动从 Hugging Face 下载模型并使用本机缓存。也可以提前下载。
+
+先确保 `uv` 使用 Python 3.12，避免 `uvx` 在旧服务器上自动选中系统 Python 3.6：
 
 ```bash
-uvx --from "huggingface_hub[cli]" hf download Qwen/Qwen3-ASR-1.7B-hf --local-dir ./models/Qwen3-ASR-1.7B-hf
-uvx --from "huggingface_hub[cli]" hf download Qwen/Qwen3-ASR-0.6B-hf --local-dir ./models/Qwen3-ASR-0.6B-hf
-uvx --from "huggingface_hub[cli]" hf download Qwen/Qwen3-ForcedAligner-0.6B-hf --local-dir ./models/Qwen3-ForcedAligner-0.6B-hf
+uv python install 3.12
+uv run --no-project --python 3.12 python -V
 ```
+
+
+```bash
+uvx --python 3.12 --with "socksio" hf download Qwen/Qwen3-ASR-1.7B-hf --local-dir ./models/Qwen3-ASR-1.7B-hf
+```
+
+```bash
+uvx --python 3.12 --with "socksio" hf download Qwen/Qwen3-ForcedAligner-0.6B-hf --local-dir ./models/Qwen3-ForcedAligner-0.6B-hf
+```
+
+如果错误回溯中出现 `python3.6` 或 `lib/python3.6`，说明没有成功选中 Python 3.12；不要通过给 Python 3.6 补装 `dataclasses` 来绕过，因为当前 Transformers 和本项目都不再支持 Python 3.6。
 
 指定本地目录时，环境变量写法如下：
 
